@@ -1,0 +1,12 @@
+{"level":"info","msg":"Connection to DB Successfull!","time":"2025-02-02T15:34:01+05:30"}
+{"level":"info","msg":"Database connection successfully established","time":"2025-02-02T15:34:01+05:30"}
+{"level":"info","msg":"Connected to KAFKA..","time":"2025-02-02T15:34:01+05:30"}
+{"level":"info","msg":"Topic: TEST_TOPIC\n","time":"2025-02-02T15:34:01+05:30"}
+{"level":"info","msg":"Topic: TEST_TOPIC2\n","time":"2025-02-02T15:34:01+05:30"}
+{"level":"info","msg":"Topic: TEST_TOPIC3\n","time":"2025-02-02T15:34:01+05:30"}
+{"level":"info","msg":"Successfully started client consumers...","time":"2025-02-02T15:34:01+05:30"}
+{"level":"error","msg":"error while reading message from topicslocalhost:9092/1: 1 request(s) timed out: disconnect (after 10475274ms in state UP)","time":"2025-02-02T18:28:36+05:30"}
+{"level":"error","msg":"Error while reciveind messagelocalhost:9092/1: 1 request(s) timed out: disconnect (after 10475270ms in state UP)","time":"2025-02-02T18:28:36+05:30"}
+{"level":"error","msg":"error while reading message from topicslocalhost:9092/1: 1 request(s) timed out: disconnect (after 10475275ms in state UP)","time":"2025-02-02T18:28:36+05:30"}
+{"level":"error","msg":"error while reading message from topicslocalhost:9092/1: 1 request(s) timed out: disconnect (after 10475275ms in state UP)","time":"2025-02-02T18:28:36+05:30"}
+{"level":"error","msg":"Error while reciveind messagelocalhost:9092/1: 1 request(s) timed out: disconnect (after 10475270ms in state UP)","time":"2025-02-02T18:28:36+05:30"}
