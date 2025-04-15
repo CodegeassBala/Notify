@@ -11,15 +11,12 @@ func GetProducerConfigMap() *kafka.ConfigMap {
 		"bootstrap.servers": "localhost:9092",
 		"client.id":         "myProducer",
 		"acks":              "all",
-		"security.protocol": "SSL",
+		// "security.protocol": "SSL",
 	}
 }
 
 func (p *KafkaProducer) Initialize() error {
 	var err error
-	p.Producer, err = kafka.NewProducer(&kafka.ConfigMap{
-		"bootstrap.servers": "localhost:9092",
-		"client.id":         "myProducer",
-		"acks":              "all"})
+	p.Producer, err = kafka.NewProducer(GetProducerConfigMap())
 	return err
 }

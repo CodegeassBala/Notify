@@ -37,12 +37,16 @@ func main() {
 
 	kafkaModels.StartConsumers()
 	cc := kafkaModels.ClientConsumers{}
-	cc.StartConsumers()
-
+	err = cc.StartConsumers()
+	if err != nil {
+		logger.Error("Failed to start client consumers", err)
+		// panic(err)
+	}
+	logger.Println("Started all consumers from main.go")
 	router := gin.Default()
-	router.GET("/test", func(c *gin.Context) {
+	router.GET("/healthCheck", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
-			"message": "Hello World"})
+			"message": "Health Check successful"})
 	})
 	router.POST("/topic/add", addTopic(notifyDB))
 	router.POST("/client", addUser(notifyDB))
@@ -79,7 +83,7 @@ func addTopic(notifyDB *sqlx.DB) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"message": "Addition of topic was completed",
+			"message": "Addition of topic completed",
 			"data":    topicConfig,
 		})
 	}

@@ -15,7 +15,7 @@ import (
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 )
 
-var CLIENTS_LIMIT int = 1
+var CLIENTS_LIMIT int = 100
 var MAX_CLIENTS_LIMIT int = CLIENTS_LIMIT + (CLIENTS_LIMIT+1)/2
 
 func getClientsData(topic string, start int, end int) ([]DB.ClientConfig, error) {
@@ -30,7 +30,7 @@ func getClientsData(topic string, start int, end int) ([]DB.ClientConfig, error)
 	WHERE clients.clientid IN (
 		SELECT clientid 
 		FROM topics_clients 
-		WHERE topicname = $1 AND client_serial_id >= $2 AND client_serial_id <= $3
+		WHERE topicname = $1 AND id >= $2 AND id <= $3
 	);
 `
 	var rows []DB.ClientConfig
@@ -54,7 +54,6 @@ func (c *ClientConsumers) StartConsumers() error {
 	if err != nil {
 		return err
 	}
-
 	c.SPIN_UP_CHAN = make(chan bool, 10)
 	go func() {
 		for e := range c.SPIN_UP_CHAN {
@@ -86,6 +85,7 @@ func (c *ClientConsumers) AddClientQueue(id int) error {
 	logger := logs.GetLogger()
 	config := &kafka.ConfigMap{
 		"bootstrap.servers": "localhost:9092",
+		// "security.protocol": "SSL",
 	}
 	admin, err := kafka.NewAdminClient(config)
 	if err != nil {
@@ -116,11 +116,28 @@ func (c *ClientConsumers) createConsumer(topic string, id int) {
 	config := &kafka.ConfigMap{
 		"bootstrap.servers": "localhost:9092",
 		"group.id":          topic,
+		// "security.protocol": "SSL",
 	}
 	consumer, err := kafka.NewConsumer(config)
 	if err != nil {
 		logger.Error("Unable to create consumer for user-queue", err)
 	}
+	kafkaAdminClient, err := kafka.NewAdminClientFromConsumer(consumer)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err = kafkaAdminClient.CreateTopics(ctx, []kafka.TopicSpecification{
+		{
+			Topic:             topic,
+			NumPartitions:     1,
+			ReplicationFactor: 1,
+		},
+	},
+		kafka.SetAdminOperationTimeout(10*time.Second),
+	)
+	if err != nil {
+		logger.Error("Failed to create a new topic: ", err)
+	}
+	logger.Info("Successfully created a new topic: ", topic)
 	err = consumer.Subscribe(topic, nil)
 	if err != nil {
 		logger.Error("Failed to subscribe to topic", err)
@@ -151,7 +168,7 @@ func (c *ClientConsumers) createConsumer(topic string, id int) {
 					logger.Error("unable to query the clients from the database:", err)
 					return
 				}
-				logger.Println(rows)
+				notificationService(topic, rows, notificationData)
 				if c.isLastConsumer(id) && len(rows) >= MAX_CLIENTS_LIMIT {
 					select {
 					case c.SPIN_UP_CHAN <- true:
@@ -162,7 +179,7 @@ func (c *ClientConsumers) createConsumer(topic string, id int) {
 				}
 			}
 		case kafka.Error:
-			logger.Error("Error while reciveind message", e)
+			logger.Error("Error while receiving message", e)
 			run = false
 		}
 	}
@@ -196,12 +213,23 @@ func (c *ClientConsumers) setConsumersCount(count int) {
 	queryString := `
 		UPDATE variables SET h['client_consumers_count'] = $1;
 	`
-	res, err := db.Exec(queryString, count_as_string)
-	_ = res
+	_, err = db.Exec(queryString, count_as_string)
 	if err != nil {
 		logger.Error("Failed to update consumers_count", err)
 	}
 	c.mu.Lock()
 	c.total_consumers = count
 	c.mu.Unlock()
+}
+
+func notificationService(topicName string, subscribedClients []DB.ClientConfig, notification DB.Notification) {
+	logger := logs.GetLogger()
+	logger.Printf(`
+  ---------------------
+  NotificationService called for topic: %s
+  ---------------------
+  Subscribed clients: %v
+  ---------------------
+  Notification data: %v
+`, topicName, subscribedClients, notification)
 }
