@@ -15,6 +15,7 @@ type ConnectionParams struct {
 	Port            string `json:"port"`
 	Sslmode         string `json:"sslmode"`
 	Connect_timeout string `json:"connect_timeout"`
+	Host            string `json:"host"`
 }
 
 type ClientConfig struct {
@@ -22,6 +23,21 @@ type ClientConfig struct {
 	Email      string         `json:"email"`
 	Phone      string         `json:"phone"`
 	Connection sql.NullString `json:"connection,omitempty"`
+}
+type TopicConfig struct {
+	TopicName string `form:"topicName" json:"topicName"`
+}
+
+type Notification struct {
+	TopicName string `json:"topic"`
+	Value     string `json:"value"`
+	Key       string `json:"key,omitempty"`
+}
+
+type Topic_Client struct {
+	TopicName string `db:"topicname"`
+	ClientId  string `db:"clientid"`
+	SerialId  string `db:"serialId"`
 }
 
 func (c ConnectionParams) getConnectionString() string {
@@ -41,21 +57,6 @@ func (c ConnectionParams) getConnectionString() string {
 		builder.WriteString(fmt.Sprintf("%s=%s ", key, value))
 	}
 	connectionString := builder.String()
+	logger.Println(connectionString)
 	return connectionString
-}
-
-type TopicConfig struct {
-	TopicName string `form:"topicName" json:"topicName"`
-}
-
-type Notification struct {
-	TopicName string `json:"topic"`
-	Value     string `json:"value"`
-	Key       string `json:"key,omitempty"`
-}
-
-type Topic_Client struct {
-	TopicName string `db:"topicname"`
-	ClientId  string `db:"clientid"`
-	SerialId  string `db:"client_serial_id"`
 }

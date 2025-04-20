@@ -40,5 +40,6 @@ start:
 	make docker-run && make run
 
 schema:
-	docker exec -t postgres-container pg_dump -U postgres --schema-only --no-owner notify > database/db/schema.sql
+	docker exec -t postgres-container pg_dump -U postgres --schema-only --no-owner --no-comments --quote-all-identifiers notify > database/schema.sql
+	sqlc generate --file database/sqlc.yaml
 

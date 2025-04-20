@@ -1,14 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	DB "notify/database"
+	"notify/database/sqlc"
 	kafkaModels "notify/kafka"
 	"notify/logs"
+	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
-	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	"github.com/sirupsen/logrus"
 
@@ -21,10 +23,13 @@ func main() {
 	// setup logger
 	logger = logs.GetLogger()
 	// Connect to DB..
-	notifyDB, err := DB.GetDB()
+	notifyDBPool, err := DB.GetDBPool()
+	defer notifyDBPool.Close()
 	if err != nil {
 		return
 	}
+	logger.Info("Connected to DB..")
+	queries := sqlc.New(notifyDBPool)
 	//Connect to KAFKA MQ..
 	p := kafkaModels.KafkaProducer{}
 	err = p.Initialize()
@@ -42,21 +47,20 @@ func main() {
 		logger.Error("Failed to start client consumers", err)
 		// panic(err)
 	}
-	logger.Println("Started all consumers from main.go")
 	router := gin.Default()
 	router.GET("/healthCheck", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"message": "Health Check successful"})
 	})
-	router.POST("/topic/add", addTopic(notifyDB))
-	router.POST("/client", addUser(notifyDB))
-	router.POST("/topic/subscribe", subscribeUser(notifyDB))
-	router.POST("/topic/unsubscribe", unSubscribeUser(notifyDB))
-	router.POST("/notify", pushMessage(notifyDB, p.Producer))
+	router.POST("/topic/add", addTopic(queries))
+	router.POST("/client", addUser(queries))
+	router.POST("/topic/subscribe", subscribeUser(queries))
+	router.POST("/topic/unsubscribe", unSubscribeUser(queries))
+	router.POST("/notify", pushMessage(queries, p.Producer))
 	router.Run("localhost:8085")
 }
 
-func addTopic(notifyDB *sqlx.DB) gin.HandlerFunc {
+func addTopic(queries *sqlc.Queries) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var topicConfig DB.TopicConfig
 		if err := c.BindJSON(&topicConfig); err != nil {
@@ -67,12 +71,8 @@ func addTopic(notifyDB *sqlx.DB) gin.HandlerFunc {
 			})
 			return
 		}
-		// add topic to the table DB
 
-		_, err := notifyDB.Query(`
-		INSERT INTO topics (topicName)
-		VALUES ($1)`,
-			topicConfig.TopicName)
+		err := queries.InsertTopic(context.TODO(), topicConfig.TopicName)
 
 		if err != nil {
 			logger.Error(err)
@@ -89,9 +89,9 @@ func addTopic(notifyDB *sqlx.DB) gin.HandlerFunc {
 	}
 }
 
-func addUser(db *sqlx.DB) gin.HandlerFunc {
+func addUser(queries *sqlc.Queries) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var clientConfig DB.ClientConfig
+		var clientConfig sqlc.InsertClientParams
 		if err := c.BindJSON(&clientConfig); err != nil {
 
 			// If there's an error during binding, send a 400 Bad Request response.
@@ -100,12 +100,10 @@ func addUser(db *sqlx.DB) gin.HandlerFunc {
 			})
 			return
 		}
-		// add topic to the table DB
-
-		_, err := db.Query(`
-		INSERT INTO "clients" (clientID, email, phone)
-		VALUES ($1, $2, $3)`,
-			clientConfig.ClientID, clientConfig.Email, clientConfig.Phone)
+		// add client to the table
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		err := queries.InsertClient(ctx, clientConfig)
 
 		if err != nil {
 			logger.Error(err)
@@ -122,7 +120,7 @@ func addUser(db *sqlx.DB) gin.HandlerFunc {
 	}
 }
 
-func subscribeUser(db *sqlx.DB) gin.HandlerFunc {
+func subscribeUser(queries *sqlc.Queries) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var subscribeConfig struct {
 			TopicName string `json:"topicName"`
@@ -136,11 +134,11 @@ func subscribeUser(db *sqlx.DB) gin.HandlerFunc {
 			return
 		}
 		logger.Info(subscribeConfig)
-		_, err = db.Query(
-			`INSERT INTO topics_clients (topicName,clientID) VALUES ($2,$1)`,
-			subscribeConfig.ClientID,
-			subscribeConfig.TopicName,
-		)
+
+		err = queries.InsertTopicClient(context.TODO(), sqlc.InsertTopicClientParams{
+			Clientid:  subscribeConfig.ClientID,
+			Topicname: subscribeConfig.TopicName})
+
 		if err != nil {
 			logger.Error(err)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -155,7 +153,7 @@ func subscribeUser(db *sqlx.DB) gin.HandlerFunc {
 	}
 }
 
-func unSubscribeUser(db *sqlx.DB) gin.HandlerFunc {
+func unSubscribeUser(queries *sqlc.Queries) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var subscribeConfig struct {
 			TopicName string `json:"topicName"`
@@ -168,11 +166,9 @@ func unSubscribeUser(db *sqlx.DB) gin.HandlerFunc {
 			})
 			return
 		}
-		_, err = db.Query(
-			`DELETE FROM topics_clients WHERE topicName = $2 AND clientID = $1`,
-			subscribeConfig.ClientID,
-			subscribeConfig.TopicName,
-		)
+		err = queries.DeleteTopicClient(context.TODO(), sqlc.DeleteTopicClientParams{
+			Clientid:  subscribeConfig.ClientID,
+			Topicname: subscribeConfig.TopicName})
 		if err != nil {
 			logger.Error(err)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -198,7 +194,7 @@ func handleError(c *gin.Context, statusCode int, err error, msg string) bool {
 	return false
 }
 
-func pushMessage(db *sqlx.DB, producer *kafka.Producer) gin.HandlerFunc {
+func pushMessage(queries *sqlc.Queries, producer *kafka.Producer) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var data DB.Notification
 
@@ -206,14 +202,12 @@ func pushMessage(db *sqlx.DB, producer *kafka.Producer) gin.HandlerFunc {
 		if err := c.BindJSON(&data); handleError(c, http.StatusBadRequest, err, "Invalid JSON payload") {
 			return
 		}
-
 		// Check if topic exists in the database
-		rows, err := db.Query(`SELECT * FROM topics WHERE topicName = $1`, data.TopicName)
+		topic, err := queries.GetTopic(context.TODO(), data.TopicName)
 		if handleError(c, http.StatusInternalServerError, err, "Database query failed") {
 			return
 		}
-		defer rows.Close()
-		if !rows.Next() {
+		if topic == "" {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": "Given topic does not exist in the topic database",
 			})

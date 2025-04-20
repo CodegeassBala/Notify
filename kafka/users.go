@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"github.com/jackc/pgx/v5"
 )
 
 var CLIENTS_LIMIT int = 100
@@ -20,7 +21,7 @@ var MAX_CLIENTS_LIMIT int = CLIENTS_LIMIT + (CLIENTS_LIMIT+1)/2
 
 func getClientsData(topic string, start int, end int) ([]DB.ClientConfig, error) {
 	logger := logs.GetLogger()
-	db, err := DB.GetDB()
+	db, err := DB.GetDBPool()
 	if err != nil {
 		logger.Error("failed to connect to db fromm the user-consumer", err)
 	}
@@ -33,10 +34,10 @@ func getClientsData(topic string, start int, end int) ([]DB.ClientConfig, error)
 		WHERE topicname = $1 AND id >= $2 AND id <= $3
 	);
 `
-	var rows []DB.ClientConfig
-	err = db.Select(&rows, queryString, topic, start, end)
-
-	return rows, err
+	// var rows []DB.ClientConfig
+	rows_pg, err := db.Query(context.Background(), queryString, topic, start, end)
+	clients, err := pgx.CollectRows[DB.ClientConfig](rows_pg, pgx.RowToStructByName[DB.ClientConfig])
+	return clients, err
 }
 
 type ClientConsumers struct {
@@ -168,7 +169,7 @@ func (c *ClientConsumers) createConsumer(topic string, id int) {
 					logger.Error("unable to query the clients from the database:", err)
 					return
 				}
-				notificationService(topic, rows, notificationData)
+				// notificationService(topic, rows, notificationData)
 				if c.isLastConsumer(id) && len(rows) >= MAX_CLIENTS_LIMIT {
 					select {
 					case c.SPIN_UP_CHAN <- true:
@@ -188,7 +189,7 @@ func (c *ClientConsumers) createConsumer(topic string, id int) {
 
 func (c *ClientConsumers) getConsumersCount() (int, error) {
 	logger := logs.GetLogger()
-	db, err := DB.GetDB()
+	db, err := DB.GetDBPool()
 	if err != nil {
 		logger.Error("failed to connect to db while querying to get the consumer's count", err)
 		return -1, err
@@ -196,7 +197,7 @@ func (c *ClientConsumers) getConsumersCount() (int, error) {
 	queryString := `
 		SELECT h['client_consumers_count'] from variables;
 	`
-	res := db.QueryRow(queryString)
+	res := db.QueryRow(context.TODO(), queryString)
 	var r sql.NullString
 	res.Scan(&r)
 	val, err := strconv.Atoi(r.String)
@@ -205,7 +206,7 @@ func (c *ClientConsumers) getConsumersCount() (int, error) {
 
 func (c *ClientConsumers) setConsumersCount(count int) {
 	logger := logs.GetLogger()
-	db, err := DB.GetDB()
+	db, err := DB.GetDBPool()
 	if err != nil {
 		log.Println("failed to connect to db while querying to set the consumer's count", err)
 	}
@@ -213,7 +214,7 @@ func (c *ClientConsumers) setConsumersCount(count int) {
 	queryString := `
 		UPDATE variables SET h['client_consumers_count'] = $1;
 	`
-	_, err = db.Exec(queryString, count_as_string)
+	_, err = db.Exec(context.Background(), queryString, count_as_string)
 	if err != nil {
 		logger.Error("Failed to update consumers_count", err)
 	}

@@ -1,34 +1,34 @@
 package database
 
 import (
+	"context"
 	"database/sql"
-	"errors"
 	"notify/logs"
 	"strconv"
 	"sync"
 
-	"github.com/jmoiron/sqlx"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 var (
-	db        *sqlx.DB
+	dbPool    *pgxpool.Pool
 	once      sync.Once
 	initError error
 )
 
-func GetDB() (*sqlx.DB, error) {
+func GetDBPool() (*pgxpool.Pool, error) {
 	once.Do(func() {
 		logger := logs.GetLogger()
-		db, initError = connectToDB()
-		db.SetMaxOpenConns(25) // Maximum number of open connections
-		db.SetMaxIdleConns(5)  // Maximum number of idle connections
+		dbPool, initError = connectToDB()
+		// db.SetMaxOpenConns(25) // Maximum number of open connections
+		// db.SetMaxIdleConns(5)  // Maximum number of idle connections
 
 		logger.Info("Database connection successfully established")
 	})
-	return db, initError
+	return dbPool, initError
 }
 
-func connectToDB() (*sqlx.DB, error) {
+func connectToDB() (*pgxpool.Pool, error) {
 	logger := logs.GetLogger()
 	connectionConfig := ConnectionParams{
 		"notify",
@@ -37,24 +37,24 @@ func connectToDB() (*sqlx.DB, error) {
 		"5432",
 		"disable",
 		"30000",
-	}
+		"localhost"}
 	connStr := connectionConfig.getConnectionString()
-	notifyDB, err := sqlx.Open("postgres", connStr)
+	poolConfig, err := pgxpool.ParseConfig(connStr)
 	if err != nil {
-		logger.Error("Could not connect to DB ", err)
+		logger.Error("Failed to parse connection string", err)
 		return nil, err
 	}
-	res := notifyDB.Ping()
-	if res != nil {
-		logger.Error("Connection to DB failed", res)
-		return nil, errors.New("connection to DB failed")
+	poolConfig.MaxConns = 10
+	pgxPool, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
+	if err != nil {
+		logger.Error("Failed to create connection pool", err)
+		return nil, err
 	}
-	logger.Info("Connection to DB Successfull!")
-	return notifyDB, nil
+	return pgxPool, nil
 }
 func GetConsumersCount() (int, error) {
 	logger := logs.GetLogger()
-	db, err := GetDB()
+	db, err := GetDBPool()
 	if err != nil {
 		logger.Error("failed to connect to db while querying to get the consumer's count", err)
 		return -1, err
@@ -62,7 +62,7 @@ func GetConsumersCount() (int, error) {
 	queryString := `
 		SELECT h['client_consumers_count'] from variables;
 	`
-	res := db.QueryRow(queryString)
+	res := db.QueryRow(context.Background(), queryString)
 	var r sql.NullString
 	res.Scan(&r)
 	val, err := strconv.Atoi(r.String)
