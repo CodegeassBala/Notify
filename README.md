@@ -1,7 +1,3 @@
-Got it! Here's an updated version of the `README.md` to reflect that it's a **self-hosted, Docker-based notification service** rather than an SDK, and that **Makefile commands** are used to interact with it:
-
----
-
 # 📣 Notifications Service
 
 A self-hosted, lightweight notification system powered by **PostgreSQL** and **Kafka**. Easily plug this service into your existing applications to manage topic-based notifications, client subscriptions, and real-time event delivery.
