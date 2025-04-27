@@ -2,9 +2,8 @@ package database
 
 import (
 	"context"
-	"database/sql"
+	"notify/database/sqlc"
 	"notify/logs"
-	"strconv"
 	"sync"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -59,12 +58,7 @@ func GetConsumersCount() (int, error) {
 		logger.Error("failed to connect to db while querying to get the consumer's count", err)
 		return -1, err
 	}
-	queryString := `
-		SELECT h['client_consumers_count'] from variables;
-	`
-	res := db.QueryRow(context.Background(), queryString)
-	var r sql.NullString
-	res.Scan(&r)
-	val, err := strconv.Atoi(r.String)
-	return val, err
+	queries := sqlc.New(db)
+	val, err := queries.GetConsumerQueuesCount(context.TODO())
+	return int(val), err
 }

@@ -1,57 +1,58 @@
 package kafka
 
 import (
+	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
-	"log"
 	"math"
+	"net/http"
 	DB "notify/database"
+	"notify/database/sqlc"
 	"notify/logs"
 	"strconv"
 	"sync"
 	"time"
 
+	"os"
+
 	"github.com/confluentinc/confluent-kafka-go/kafka"
-	"github.com/jackc/pgx/v5"
 )
 
-var CLIENTS_LIMIT int = 100
-var MAX_CLIENTS_LIMIT int = CLIENTS_LIMIT + (CLIENTS_LIMIT+1)/2
+var CLIENTS_LIMIT int = 0
+var MAX_CLIENTS_LIMIT int = 0
+var WEBHOOK_URL string = ""
 
-func getClientsData(topic string, start int, end int) ([]DB.ClientConfig, error) {
-	logger := logs.GetLogger()
-	db, err := DB.GetDBPool()
-	if err != nil {
-		logger.Error("failed to connect to db fromm the user-consumer", err)
-	}
-
-	queryString := `
-	SELECT clientid,email,phone,connection FROM clients 
-	WHERE clients.clientid IN (
-		SELECT clientid 
-		FROM topics_clients 
-		WHERE topicname = $1 AND id >= $2 AND id <= $3
-	);
-`
-	// var rows []DB.ClientConfig
-	rows_pg, err := db.Query(context.Background(), queryString, topic, start, end)
-	clients, err := pgx.CollectRows[DB.ClientConfig](rows_pg, pgx.RowToStructByName[DB.ClientConfig])
-	return clients, err
+func initializeGlobalVariables() {
+	CLIENTS_LIMIT, _ = strconv.Atoi(os.Getenv("CLIENTS_LIMIT"))
+	WEBHOOK_URL = os.Getenv("WEBHOOK_URL")
+	MAX_CLIENTS_LIMIT = CLIENTS_LIMIT + (CLIENTS_LIMIT+1)/2
 }
 
 type ClientConsumers struct {
 	total_consumers int
 	SPIN_UP_CHAN    chan bool
 	mu              sync.Mutex
+	queries         *sqlc.Queries
+}
+
+func (c *ClientConsumers) initialize() {
+	logger := logs.GetLogger()
+	db, err := DB.GetDBPool()
+	if err != nil {
+		logger.Error("failed to connect to db fromm the user-consumer", err)
+	}
+	c.queries = sqlc.New(db)
+	return
 }
 
 func (c *ClientConsumers) StartConsumers() error {
 	logger := logs.GetLogger()
+	initializeGlobalVariables()
 	var err error
 	c.mu.Lock()
 	c.total_consumers, err = c.getConsumersCount()
 	c.mu.Unlock()
+	c.initialize()
 	if err != nil {
 		return err
 	}
@@ -163,13 +164,17 @@ func (c *ClientConsumers) createConsumer(topic string, id int) {
 				} else {
 					end = id * CLIENTS_LIMIT
 				}
-				var rows []DB.ClientConfig
-				rows, err := getClientsData(notificationData.TopicName, start, end)
+				var rows []sqlc.Client
+				rows, err := c.queries.GetClientsInRange(context.Background(), sqlc.GetClientsInRangeParams{
+					TopicName: topic,
+					StartID:   int32(start),
+					EndID:     int32(end),
+				})
 				if err != nil {
 					logger.Error("unable to query the clients from the database:", err)
 					return
 				}
-				// notificationService(topic, rows, notificationData)
+				notificationService(topic, rows, notificationData)
 				if c.isLastConsumer(id) && len(rows) >= MAX_CLIENTS_LIMIT {
 					select {
 					case c.SPIN_UP_CHAN <- true:
@@ -188,33 +193,13 @@ func (c *ClientConsumers) createConsumer(topic string, id int) {
 }
 
 func (c *ClientConsumers) getConsumersCount() (int, error) {
-	logger := logs.GetLogger()
-	db, err := DB.GetDBPool()
-	if err != nil {
-		logger.Error("failed to connect to db while querying to get the consumer's count", err)
-		return -1, err
-	}
-	queryString := `
-		SELECT h['client_consumers_count'] from variables;
-	`
-	res := db.QueryRow(context.TODO(), queryString)
-	var r sql.NullString
-	res.Scan(&r)
-	val, err := strconv.Atoi(r.String)
-	return val, err
+	val, err := c.queries.GetConsumerQueuesCount(context.TODO())
+	return int(val), err
 }
 
 func (c *ClientConsumers) setConsumersCount(count int) {
 	logger := logs.GetLogger()
-	db, err := DB.GetDBPool()
-	if err != nil {
-		log.Println("failed to connect to db while querying to set the consumer's count", err)
-	}
-	count_as_string := strconv.Itoa(count)
-	queryString := `
-		UPDATE variables SET h['client_consumers_count'] = $1;
-	`
-	_, err = db.Exec(context.Background(), queryString, count_as_string)
+	err := c.queries.SetConsumerQueuesCount(context.TODO(), int32(count))
 	if err != nil {
 		logger.Error("Failed to update consumers_count", err)
 	}
@@ -223,14 +208,29 @@ func (c *ClientConsumers) setConsumersCount(count int) {
 	c.mu.Unlock()
 }
 
-func notificationService(topicName string, subscribedClients []DB.ClientConfig, notification DB.Notification) {
+func notificationService(topicName string, subscribedClients []sqlc.Client, notification DB.Notification) {
 	logger := logs.GetLogger()
-	logger.Printf(`
-  ---------------------
-  NotificationService called for topic: %s
-  ---------------------
-  Subscribed clients: %v
-  ---------------------
-  Notification data: %v
-`, topicName, subscribedClients, notification)
+	webhookUrl := os.Getenv("WEBHOOK_URL")
+	if webhookUrl == "" {
+		logger.Error("WEBHOOK_URL is not set")
+		return
+	}
+	// Send notification for subscribed clients
+	postBody, err := json.Marshal(DB.NotificationPostBody{
+		Clients:      subscribedClients,
+		Notification: notification,
+	})
+	if err != nil {
+		logger.Error("Failed to marshal notification data:", err)
+		return
+	}
+
+	_, err = http.Post(webhookUrl, "application/json", bytes.NewBuffer(postBody))
+
+	if err != nil {
+		logger.Error("Failed to send notification to webhook URL:", err)
+		return
+	}
+	logger.Info("Notification sent successfully to webhook URL")
+	return
 }

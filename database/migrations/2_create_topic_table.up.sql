@@ -1,3 +1,3 @@
 CREATE TABLE IF NOT EXISTS TOPICS (
-    topicName TEXT PRIMARY KEY
+    topic_name TEXT PRIMARY KEY
 );

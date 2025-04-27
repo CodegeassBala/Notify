@@ -1,10 +1,13 @@
+include .env
+
 APP_NAME=notification-app
 CMD_PATH=./cmd/main.go
 IMAGE_NAME=notification-app
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=cr07fr01@EN
-POSTGRES_DB=notify
-DB_URL=postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@localhost:5432/$(POSTGRES_DB)?sslmode=disable
+POSTGRES_USER=${DB_USER}
+POSTGRES_PASSWORD=${DB_PASSWORD}
+POSTGRES_DB=${DB_NAME}
+POSTGRES_PORT=${DB_PORT}
+DB_URL=postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@localhost:${POSTGRES_PORT}/$(POSTGRES_DB)?sslmode=disable
 
 .PHONY: build run docker-build docker-run clean
 
@@ -31,6 +34,8 @@ migrate-up:
 migrate-down:
 	migrate -path ./database/migrations -database "$(DB_URL)" down
 
+force-clean:
+	migrate -path ./database/migrations -database "$(DB_URL)" drop -f
 
 migrate-down-to:
 	@read -p "Enter migration version to rollback to: " version; \

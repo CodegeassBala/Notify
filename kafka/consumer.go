@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	DB "notify/database"
+	"notify/database/sqlc"
 	"notify/logs"
 	"strconv"
 	"time"
@@ -22,7 +23,7 @@ func GetConsumerConfigMap(groupId string) *kafka.ConfigMap {
 
 func pushMessageIntoCLientQueues(p *kafka.Producer, e *kafka.Message) {
 	logger := logs.GetLogger()
-	logger.Info("pushMessageIntoCLientQueues called for event ==> ", e)
+	logger.Info("event pushed into client queues")
 	consumersCount, err := DB.GetConsumersCount()
 	if err != nil {
 		logger.Error("failed to get client consumers count", err)
@@ -60,7 +61,6 @@ func waitForTopicReady(admin *kafka.AdminClient, topic string, timeout time.Dura
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
-	// logger.Errorln("timeout: topic", topic, "not available")
 	return fmt.Errorf("timeout: topic %s not available", topic)
 }
 
@@ -71,20 +71,6 @@ func startConsumer(groupId string, topics []string) {
 	if err != nil {
 		logger.Error(err.Error())
 	}
-	logger.Info("Start topic consumer called for topics: ", topics)
-	kafkaAdminClient, err := kafka.NewAdminClientFromConsumer(consumer)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	_, err = kafkaAdminClient.CreateTopics(ctx, []kafka.TopicSpecification{
-		{
-			Topic:             topics[0],
-			NumPartitions:     1,
-			ReplicationFactor: 1},
-	})
-	if err != nil {
-		logger.Error("Failed to create a new topic: ", err)
-	}
-	logger.Info("Successfully created a new topic: ", topics[0])
 	topicsToSubscribe := topics
 	err = consumer.SubscribeTopics(topicsToSubscribe, nil)
 	if err != nil {
@@ -101,7 +87,7 @@ func startConsumer(groupId string, topics []string) {
 		switch e := ev.(type) {
 		case *kafka.Message:
 			{
-				logger.Info("Message received by topic consumer", e.Value)
+				logger.Info("Message received by topic consumer")
 				pushMessageIntoCLientQueues(producer, e)
 
 			}
@@ -115,26 +101,12 @@ func startConsumer(groupId string, topics []string) {
 
 func StartConsumers() {
 	logger := logs.GetLogger()
-	notifyDB, err := DB.GetDB()
+	notifyDB, err := DB.GetDBPool()
 	if err != nil {
 		logger.Error(err)
 		return
 	}
-	rows, err := notifyDB.Query(`SELECT * FROM topics`)
-	if err != nil {
-		logger.Error("Unable to query DB while starting consumers..", err)
-		return
-	}
-	var topics []string
-	for rows.Next() {
-		var topic DB.TopicConfig
-		err := rows.Scan(&topic.TopicName)
-		if err != nil {
-			logger.Error(err)
-			return
-		}
-		topics = append(topics, topic.TopicName)
-	}
+	topics, err := sqlc.New(notifyDB).GetAllTopics(context.TODO())
 	for _, t := range topics {
 		logger.Printf("Topic: %s\n", t)
 		go startConsumer("t", []string{t})

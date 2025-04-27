@@ -1,20 +1,20 @@
 CREATE TABLE IF NOT EXISTS topics_clients (
-    clientID    TEXT NOT NULL,
-    topicName   TEXT NOT NULL,
-    serialId    INT NOT NULL,  
-    FOREIGN KEY (clientID) REFERENCES clients(clientID) ON DELETE CASCADE,
-    FOREIGN KEY (topicName) REFERENCES topics(topicName) ON DELETE CASCADE
+    client_id    TEXT NOT NULL,
+    topic_name   TEXT NOT NULL,
+    serial_id    INT NOT NULL,  
+    FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
+    FOREIGN KEY (topic_name) REFERENCES topics(topic_name) ON DELETE CASCADE
 );
 
 CREATE OR REPLACE FUNCTION set_serial_id_from_clients()
 RETURNS TRIGGER AS $$
 BEGIN
     -- Fetch the serial ID from the clients table
-    SELECT id INTO NEW.serialId FROM clients WHERE clientID = NEW.clientID;
+    SELECT id INTO NEW.serial_id FROM clients WHERE client_id = NEW.client_id;
 
-    -- If clientID does not exist, raise an error
-    IF NEW.serialId IS NULL THEN
-        RAISE EXCEPTION 'clientID % does not exist in clients table', NEW.clientID;
+    -- If client_id does not exist, raise an error
+    IF NEW.serial_id IS NULL THEN
+        RAISE EXCEPTION 'client_id % does not exist in clients table', NEW.client_id;
     END IF;
 
     RETURN NEW;

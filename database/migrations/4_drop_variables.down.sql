@@ -1,1 +1,1 @@
-DELETE TABLE IF EXISTS variables;
+DROP TABLE IF EXISTS variables;

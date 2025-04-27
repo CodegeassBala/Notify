@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/sirupsen/logrus"
 
@@ -22,6 +23,11 @@ var logger *logrus.Logger
 func main() {
 	// setup logger
 	logger = logs.GetLogger()
+	err := godotenv.Load(".env") // <--- relative path to your .env
+	if err != nil {
+		// Load .env
+		logger.Println("No .env file found or error loading .env", err)
+	}
 	// Connect to DB..
 	notifyDBPool, err := DB.GetDBPool()
 	defer notifyDBPool.Close()
@@ -30,6 +36,7 @@ func main() {
 	}
 	logger.Info("Connected to DB..")
 	queries := sqlc.New(notifyDBPool)
+	initTopics(queries)
 	//Connect to KAFKA MQ..
 	p := kafkaModels.KafkaProducer{}
 	err = p.Initialize()
@@ -60,6 +67,55 @@ func main() {
 	router.Run("localhost:8085")
 }
 
+func initTopics(queries *sqlc.Queries) {
+	context, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	kafkaAdminClient, err := kafka.NewAdminClient(&kafka.ConfigMap{
+		"bootstrap.servers": "localhost:9092"})
+	if err != nil {
+		logger.Error("Failed to create admin client while initializing topics", err)
+		return
+	}
+	defer kafkaAdminClient.Close()
+	topics, err := queries.GetAllTopics(context)
+	var kafkaTopics []kafka.TopicSpecification
+	for _, topic := range topics {
+		kafkaTopics = append(kafkaTopics, kafka.TopicSpecification{
+			Topic:             topic,
+			NumPartitions:     1,
+			ReplicationFactor: 1})
+	}
+	_, err = kafkaAdminClient.CreateTopics(context, kafkaTopics)
+	if err != nil {
+		logger.Error("Failed to create topics", err)
+		return
+	}
+	logger.Info("Successfully created topics")
+}
+
+func addTopicToKafka(topic string) error {
+	kafkaAdminClient, err := kafka.NewAdminClient(&kafka.ConfigMap{
+		"bootstrap.servers": "localhost:9092"})
+	if err != nil {
+		logger.Error("Failed to create admin client while adding topic", err)
+		return err
+	}
+	defer kafkaAdminClient.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	topicSpec := kafka.TopicSpecification{
+		Topic:             topic,
+		NumPartitions:     1,
+		ReplicationFactor: 1}
+	_, err = kafkaAdminClient.CreateTopics(ctx, []kafka.TopicSpecification{topicSpec})
+	if err != nil {
+		logger.Error("Failed to create topic", err)
+		return err
+	}
+	logger.Info("Successfully created topic")
+	return nil
+}
+
 func addTopic(queries *sqlc.Queries) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var topicConfig DB.TopicConfig
@@ -80,6 +136,11 @@ func addTopic(queries *sqlc.Queries) gin.HandlerFunc {
 				"error": err.Error(),
 			})
 			return
+		}
+
+		err = addTopicToKafka(topicConfig.TopicName)
+		if err != nil {
+			logger.Error("Failed to add topic to kafka", err)
 		}
 
 		c.JSON(http.StatusOK, gin.H{
@@ -136,8 +197,8 @@ func subscribeUser(queries *sqlc.Queries) gin.HandlerFunc {
 		logger.Info(subscribeConfig)
 
 		err = queries.InsertTopicClient(context.TODO(), sqlc.InsertTopicClientParams{
-			Clientid:  subscribeConfig.ClientID,
-			Topicname: subscribeConfig.TopicName})
+			ClientID:  subscribeConfig.ClientID,
+			TopicName: subscribeConfig.TopicName})
 
 		if err != nil {
 			logger.Error(err)
@@ -167,8 +228,8 @@ func unSubscribeUser(queries *sqlc.Queries) gin.HandlerFunc {
 			return
 		}
 		err = queries.DeleteTopicClient(context.TODO(), sqlc.DeleteTopicClientParams{
-			Clientid:  subscribeConfig.ClientID,
-			Topicname: subscribeConfig.TopicName})
+			ClientID:  subscribeConfig.ClientID,
+			TopicName: subscribeConfig.TopicName})
 		if err != nil {
 			logger.Error(err)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -184,7 +245,9 @@ func unSubscribeUser(queries *sqlc.Queries) gin.HandlerFunc {
 }
 
 func handleError(c *gin.Context, statusCode int, err error, msg string) bool {
+
 	if err != nil {
+		logger.Error(msg, err)
 		c.JSON(statusCode, gin.H{
 			"error":   msg,
 			"details": err.Error(),
@@ -213,6 +276,7 @@ func pushMessage(queries *sqlc.Queries, producer *kafka.Producer) gin.HandlerFun
 			})
 			return
 		}
+
 		// Serialize key and value
 		key, err := json.Marshal(data.Key)
 		if handleError(c, http.StatusInternalServerError, err, "Failed to serialize key") {
@@ -249,6 +313,7 @@ func pushMessage(queries *sqlc.Queries, producer *kafka.Producer) gin.HandlerFun
 			Key:   key,
 			Value: value,
 		}, deliveryChan)
+
 		if handleError(c, http.StatusInternalServerError, err, "Failed to push message to Kafka") {
 			return
 		}
